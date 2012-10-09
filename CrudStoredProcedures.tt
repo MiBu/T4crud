@@ -1,0 +1,504 @@
+﻿<#@ template language="C#v3.5" hostspecific="True" debug="True" #>
+<#@ output extension="SQL" #>
+<#@ include file="T4Toolbox.tt" #>
+<#@ import namespace="System.Text"#>
+<#@ assembly name="System.Core.dll" #>
+<#@ import namespace="System.Linq" #>
+<#@ assembly name="Microsoft.SqlServer.Management.Sdk.Sfc" #>
+<#@ assembly name="Microsoft.SqlServer.ConnectionInfo" #>
+<#@ assembly name="Microsoft.SqlServer.Smo" #>
+<#@ import namespace="Microsoft.SqlServer.Management.Smo" #>
+
+<# 
+//Uncomment and run method with parameter to generate SQL code
+	string serverName = "NAME OF SQL SERVER HERE";
+    string dbName = "DATABASE NAME";
+	string storedProceduresPrefix = "PREFIX FOR GENERATED PROCEDUERS i.e. zzgen_";
+		//Columns to skip when checking for diff
+	string[] skipColumns = {""};
+	
+	//Tables, Views or procedures to skip when checking for diff
+	string[] skipObjects = {""};
+	
+	Server server = new Server(serverName);
+	server.ConnectionContext.LoginSecure = true;
+    Database database = server.Databases[dbName];
+
+///Creation of stored procedures
+///type table name, or * to generate all procedures
+	GenProcedures("_Backup_Vlasnici", database, storedProceduresPrefix, skipObjects, skipColumns);
+	
+///Altering procedures
+	//
+	//AlterProcedures("*", database, storedProceduresPrefix, skipObjects, skipColumns);
+//
+	
+
+#>
+<#+
+	private void GenProcedures(string tblName, Database db, string storedProceduresPrefix, string[] skipObjects, string[] skipColumns){
+		if (tblName == "*")
+		{
+			foreach (Table table in db.Tables)
+				if (!skipObjects.Contains(table.Name))
+					GenTableProcedures(table, storedProceduresPrefix, skipColumns);
+		}
+		else if (!skipObjects.Contains(tblName))
+			GenTableProcedures(db.Tables[tblName], storedProceduresPrefix, skipColumns);
+
+		#>		
+<#+ } #>
+<#+
+	private void AlterProcedures(string tblName, Database db, string storedProceduresPrefix, string[] skipObjects, string[] skipColumns){
+		foreach(string str in skipObjects)
+			WriteLine("--Skipping object: " + str);
+		WriteLine("");
+		if (tblName == "*")
+		{
+			foreach (Table table in db.Tables)
+				if (!skipObjects.Contains(table.Name))
+					AlterTableProcedures(table.Name, db, storedProceduresPrefix, skipObjects, skipColumns);
+		}			
+		else if (!skipObjects.Contains(tblName))
+			AlterTableProcedures(tblName, db, storedProceduresPrefix, skipObjects, skipColumns);
+		#>		
+<#+ } #>
+<#+
+	private void GenTableProcedures(Table tbl, string storedProceduresPrefix, string[] skipColumns){
+	#>
+--------------------------------------------------------
+--<#= tbl.Name #>
+--------------------------------------------------------
+
+--select
+<#+ WriteLine("CREATE " + GetSelectProc(tbl, skipColumns)); #>
+GO
+
+--delete
+<#+ WriteLine("CREATE " + GetDeleteProc(tbl, skipColumns)); #>
+GO
+
+--insert
+<#+ WriteLine("CREATE " + GetInsertProc(tbl, skipColumns)); #>
+GO
+
+--update
+<#+ WriteLine("CREATE " + GetUpdateProc(tbl, skipColumns)); #>
+GO
+	
+	
+<#+ } #>
+<#+
+	private void AlterTableProcedures(string tblName, Database db, string storedProceduresPrefix, string[] skipObjects, string[] skipColumns){
+	#>
+<#+
+		
+		string procDeleteName = storedProceduresPrefix+tblName+"Delete";
+		string procSelectName = storedProceduresPrefix+tblName+"Select";
+		string procInsertName = storedProceduresPrefix+tblName+"Insert";
+		string procUpdateName = storedProceduresPrefix+tblName+"Update";
+		
+		AlterSelect(db, tblName, procSelectName, skipObjects, skipColumns);
+		AlterDelete(db, tblName, procDeleteName, skipObjects, skipColumns);
+		AlterInsert(db, tblName, procInsertName, skipObjects, skipColumns);
+		AlterUpdate(db, tblName, procUpdateName, skipObjects, skipColumns);
+ } #>
+<#+
+	private void AlterSelect(Database db, string tblName, string procSelectName, string[] skipColumns, string[] skipObjects){
+		 //SELECT
+		if (!skipObjects.Contains(procSelectName) && db.StoredProcedures.Contains(procSelectName))
+		{
+		string procSelect = db.StoredProcedures[procSelectName].TextHeader + db.StoredProcedures[procSelectName].TextBody;
+		procSelect = procSelect.Remove(0, procSelect.IndexOf("CREATE")).Trim();
+		procSelect = procSelect.Remove(0, procSelect.IndexOf("PROCEDURE")).Trim();
+		string selectProcedure = GetSelectProc(db.Tables[tblName], skipColumns);
+		if (!compareProceduresMinified(procSelect, selectProcedure, true))
+		{#>
+		
+--<#= tblName #>
+--select
+<#+WriteLine("ALTER " + selectProcedure); #>
+GO
+<#+	}}	#>
+<#+ } #>
+<#+
+	private void AlterDelete(Database db, string tblName, string procDeleteName, string[] skipObjects, string[] skipColumns){
+		 //DELETE
+		if (!skipObjects.Contains(procDeleteName) && db.StoredProcedures.Contains(procDeleteName))
+		{
+		string procDelete = db.StoredProcedures[procDeleteName].TextHeader + db.StoredProcedures[procDeleteName].TextBody;
+		procDelete = procDelete.Remove(0, procDelete.IndexOf("CREATE")).Trim();
+		procDelete = procDelete.Remove(0, procDelete.IndexOf("PROCEDURE")).Trim();
+		string deleteProcedure = GetDeleteProc(db.Tables[tblName], skipColumns);
+		if (!compareProceduresMinified(procDelete, deleteProcedure, true))
+		{#>
+		
+--<#= tblName #>
+--delete
+<#+ WriteLine("ALTER " + deleteProcedure); #>
+GO
+<#+	}}	#>
+<#+ } #>
+<#+
+	private void AlterInsert(Database db, string tblName, string procInsertName, string[] skipObjects, string[] skipColumns){
+		 //INSERT
+		if (!skipObjects.Contains(procInsertName) && db.StoredProcedures.Contains(procInsertName))
+		{
+		string procInsert = db.StoredProcedures[procInsertName].TextHeader + db.StoredProcedures[procInsertName].TextBody;
+		procInsert = procInsert.Remove(0, procInsert.IndexOf("CREATE"));
+		procInsert = procInsert.Remove(0, procInsert.IndexOf("PROCEDURE")).Trim();
+		string insertProcedure = GetInsertProc(db.Tables[tblName], skipColumns);
+		if (!compareProceduresMinified(procInsert, insertProcedure, true))
+		{#>
+		
+--<#= tblName #>
+--insert
+<#+WriteLine("ALTER " + insertProcedure); #>
+GO
+<#+	}}	#>
+<#+ } #>
+<#+
+	private void AlterUpdate(Database db, string tblName, string procUpdateName, string[] skipObjects, string[] skipColumns){
+		 //INSERT
+		if (!skipObjects.Contains(procUpdateName) && db.StoredProcedures.Contains(procUpdateName))
+		{
+		string procUpdate = db.StoredProcedures[procUpdateName].TextHeader + db.StoredProcedures[procUpdateName].TextBody;
+		procUpdate = procUpdate.Remove(0, procUpdate.IndexOf("CREATE")).Trim();
+		procUpdate = procUpdate.Remove(0, procUpdate.IndexOf("PROCEDURE")).Trim();
+		string updateProcedure = GetUpdateProc(db.Tables[tblName], skipColumns);
+		if (!compareProceduresMinified(procUpdate, updateProcedure, true))
+		{#>
+		
+--<#= tblName #>
+--update
+<#+WriteLine("ALTER " + updateProcedure); #>
+GO
+<#+	}}	#>
+<#+ } #>
+<#+ //Select procedure
+private string GetSelectProc(Table tbl, string[] skipColumns){
+	StringBuilder result = new StringBuilder();
+	result.AppendLine("PROCEDURE [dbo].[zzgen_" + tbl.Name + "Select]");
+	result.AppendLine("(");
+
+	bool first = true;
+	foreach (Column column in tbl.Columns)
+	{
+		if (column.InPrimaryKey && !skipColumns.Contains(column.Name))
+		{
+			if (!first)
+				result.AppendLine(",");
+			else
+				first = false;
+			result.Append("	@" + column.Name + " " + column.DataType.Name + getConstrains(column, true));
+		}
+	}
+
+	result.AppendLine();
+	result.AppendLine(")");
+	result.AppendLine("AS");
+	result.AppendLine("BEGIN");
+	result.AppendLine("	SELECT *");
+	result.AppendLine("	FROM");
+	result.AppendLine("		dbo." + tbl.Name);
+	result.AppendLine("	WHERE"); 
+	
+	first = true;
+	foreach(Column column in tbl.Columns)
+	{
+		if (column.InPrimaryKey && !skipColumns.Contains(column.Name))
+		{
+			if (first)
+			{
+				result.AppendLine("		" + column.Name + " = @" + column.Name);
+				first = false;
+			}
+			else 
+			{
+				result.AppendLine("		AND "+column.Name + " = @" + column.Name);
+			}
+		}
+	}
+	result.Append("END");
+	return result.ToString();
+} #>
+<#+ //Delete procedure
+private string GetDeleteProc(Table tbl, string[] skipColumns){
+	StringBuilder result = new StringBuilder();
+	result.AppendLine("PROCEDURE dbo.zzgen_" + tbl.Name + "Delete");
+	result.AppendLine("(");
+
+	bool first = true;
+	foreach (Column column in tbl.Columns)
+	{
+		//if (column.InPrimaryKey && !skipColumns.Contains(column.Name))
+		{
+			if (!first)
+				result.AppendLine(",");
+			else
+				first = false;
+			result.Append("	@" + column.Name + " " + column.DataType.Name + getConstrains(column, true));
+		}
+	}
+
+	result.AppendLine();
+	result.AppendLine(")");
+	result.AppendLine("AS");
+	result.AppendLine("BEGIN");
+	result.AppendLine("	SET NOCOUNT ON");
+	result.AppendLine();
+	result.AppendLine("	DELETE ");
+	result.AppendLine("	FROM ");
+	result.AppendLine("		dbo." + tbl.Name);
+	result.AppendLine("	WHERE"); 
+	
+	first = true;
+	foreach(Column column in tbl.Columns)
+	{
+		if (column.InPrimaryKey && !skipColumns.Contains(column.Name))
+		{
+			if (first)
+			{
+				result.AppendLine("		" + column.Name + " = @" + column.Name);
+				first = false;
+			}
+			else 
+			{
+				result.AppendLine("		AND "+column.Name + " = @" + column.Name);
+			}
+		}
+	}
+	result.AppendLine("	" + Environment.NewLine +"	RETURN @@Error");
+	result.Append("END");
+	return result.ToString();
+} #>
+<#+ //Insert procedure
+private string GetInsertProc(Table tbl, string[] skipColumns){
+	StringBuilder result = new StringBuilder();
+	result.AppendLine("PROCEDURE dbo.zzgen_" + tbl.Name + "Insert");
+	result.AppendLine("(");
+
+	bool first = true;
+	bool skipNext = false;
+	foreach (Column column in tbl.Columns)
+	{
+		if (!skipColumns.Contains(column.Name))
+		{
+			if (!first)
+				result.AppendLine(", ");
+			if (skipNext)
+				result.AppendLine("	");
+			result.Append("	@" + column.Name + " " + column.DataType.Name + getConstrains(column, true));
+			skipNext = false;
+			first = false;
+		}
+		else
+		{
+			skipNext = true;
+		}
+	}
+	result.Append(" ");
+	result.AppendLine();
+	result.AppendLine(")");
+	result.AppendLine("AS");
+	result.AppendLine("BEGIN");
+	result.AppendLine("	SET NOCOUNT ON");
+	result.AppendLine();
+	result.AppendLine("	INSERT INTO dbo." + tbl.Name);
+	result.AppendLine("	(");
+	first = true;
+	skipNext = false;
+	foreach (Column column in tbl.Columns)
+	{
+		if (!skipColumns.Contains(column.Name))
+		{
+			if (!first)
+				result.AppendLine(",");
+			if (skipNext)
+				result.AppendLine("		");
+			result.Append("		"+column.Name);
+			first = false;
+			skipNext = false;
+		}
+		else
+		{
+			skipNext = true;
+		}
+	}
+	result.AppendLine();
+	result.AppendLine("	) ");
+	result.AppendLine("	VALUES ");
+	result.AppendLine("	(");
+	first = true;
+	skipNext = false;
+	foreach (Column column in tbl.Columns)
+	{
+		if (!skipColumns.Contains(column.Name))
+		{
+			if (!first)
+				result.AppendLine(", ");
+			if (skipNext)
+				result.AppendLine("		");
+			
+			result.Append("		@" + column.Name);
+			first = false;
+			skipNext = false;
+		}
+		else
+		{
+			skipNext = true;
+		}
+	}
+	result.Append(" ");
+	result.AppendLine();
+	result.AppendLine("	)");
+	result.AppendLine("	");
+	result.AppendLine("	RETURN @@ERROR");
+	result.Append("END");
+	return result.ToString();
+} #>
+<#+ //Update procedure
+private string GetUpdateProc(Table tbl, string[] skipColumns){
+	StringBuilder result = new StringBuilder();
+	result.AppendLine("PROCEDURE dbo.zzgen_" + tbl.Name + "Update");
+	result.AppendLine("(");
+
+	bool first = true;
+	bool skipNext = false;
+	foreach (Column column in tbl.Columns)
+	{
+		if (!skipColumns.Contains(column.Name))
+		{
+			if (!first)
+				result.AppendLine(",");
+			if (skipNext)
+				result.AppendLine("	");
+			result.Append("	@" + column.Name + " " + column.DataType.Name + getConstrains(column, false));
+			first = false;	
+			skipNext = false;
+		}
+		else
+			skipNext = true;
+	}
+
+	result.AppendLine();
+	result.AppendLine(")");
+	result.AppendLine("AS");
+	result.AppendLine("BEGIN");
+	result.AppendLine("	SET NOCOUNT ON");
+	result.AppendLine();
+	result.AppendLine("	UPDATE dbo." + tbl.Name + " SET");
+	
+	first = true;
+	skipNext = false;
+	foreach (Column column in tbl.Columns)
+	{
+		if (!column.InPrimaryKey && !skipColumns.Contains(column.Name))
+		{
+			if (!first)
+				result.AppendLine(", ");
+			if (skipNext)
+				result.AppendLine("		");	
+			result.Append("		" + column.Name + " = " +"@" + column.Name);
+			first = false;
+			skipNext = false;
+		}
+		else if (!column.InPrimaryKey && skipColumns.Contains(column.Name))
+			skipNext = true;
+	}
+	result.AppendLine(" ");
+	result.AppendLine("	WHERE");
+	first = true;
+	skipNext = false;
+	foreach(Column column in tbl.Columns)
+	{
+		if (column.InPrimaryKey  && !skipColumns.Contains(column.Name))
+		{
+			if (skipNext)
+			{
+				result.AppendLine("		");
+			}
+			if (first)
+			{
+				result.AppendLine("		" + column.Name + " = @" + column.Name);
+				first = false;
+			}
+			else 
+			{
+				result.AppendLine("		AND "+column.Name + " = @" + column.Name);
+			}
+			skipNext = false;
+		}
+		else if (column.InPrimaryKey && skipColumns.Contains(column.Name))
+		{
+			skipNext = false;
+		}
+	}
+	result.AppendLine();
+	result.AppendLine("	RETURN @@Error");
+	result.Append("END");
+	return result.ToString();
+} #>
+<#+//Helper functions
+private string stringIndent(string source)
+{
+	if (string.IsNullOrEmpty(source))
+		return string.Empty;
+	return string.Format(" {0}", source);
+}
+private string stringIndentInBrackets(string source)
+{
+	if (string.IsNullOrEmpty(source))
+		return string.Empty;
+	return string.Format("({0})", source);
+}
+
+private string stringIndentAfterEquals(string source)
+{
+	if (string.IsNullOrEmpty(source))
+		return string.Empty;
+	return string.Format(" = {0}", source);
+}
+
+private string stringMinify(string source)
+{
+	if (string.IsNullOrEmpty(source))
+		return string.Empty;
+	return source.Replace(" ", "").Replace("\t","").Replace("\r\n","");
+}
+
+///Summary///
+/// Compares procedures, returns true if same.
+private bool compareProceduresMinified(string procedure1, string procedure2, bool ignoreName)
+{
+	if (ignoreName)
+	{
+		procedure1 = procedure1.Remove(0, procedure1.IndexOf("(")).Trim();
+		procedure2 = procedure2.Remove(0, procedure2.IndexOf("(")).Trim();
+	}
+	return (string.Compare(stringMinify(procedure1),stringMinify(procedure2)) == 0);
+}
+
+private string getConstrains(Column column, bool getNullable)
+{
+	string result = string.Empty;
+	if (column.DataType.SqlDataType == SqlDataType.VarChar || column.DataType.SqlDataType == SqlDataType.Char)
+	{
+		if (column.DataType.MaximumLength > 0)
+			result = stringIndentInBrackets(column.DataType.MaximumLength.ToString());
+	}
+	else if (column.DataType.SqlDataType == SqlDataType.VarCharMax)
+		result = stringIndentInBrackets("max");
+	else if (column.DataType.SqlDataType == SqlDataType.Int)
+	{
+		//if (column.Nullable)
+		//	result += stringIndentAfterEquals("NULL");
+	}
+	else if (column.DataType.SqlDataType == SqlDataType.Decimal)
+		result = stringIndentInBrackets(column.DataType.NumericPrecision.ToString() + ", " + column.DataType.NumericScale.ToString());
+	if (column.Nullable && getNullable)
+		result += stringIndentAfterEquals("NULL");
+	return result;
+		
+}
+#>
